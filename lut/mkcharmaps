@@ -1,0 +1,158 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""mkcharmaps
+
+Read in CSV character map tables and output JSON
+
+Source: 3GPP TS 23.038 version 18.0.0 Release 18
+
+"""
+
+import unicodedata
+import json
+import csv
+import os
+
+# Output File
+CHARMAP = 'gsmcharmaps.json'
+
+# National Language Identifier (6.2.1.2.4)
+# ID -> (name, locking table, single shift table)
+LANGUAGES = {
+    0: ('default', '6.2.1', '6.2.1.1'),
+    1: ('turkish', 'A.3.1', 'A.2.1'),
+    2: ('spanish', None, 'A.2.2'),
+    3: ('portugese', 'A.3.3', 'A.2.3'),
+    4: ('bengali', 'A.3.4', 'A.2.4'),
+    5: ('gujarati', 'A.3.5', 'A.2.5'),
+    6: ('hindi', 'A.3.6', 'A.2.6'),
+    7: ('kannada', 'A.3.7', 'A.2.7'),
+    8: ('malayalam', 'A.3.8', 'A.2.8'),
+    9: ('oriya', 'A.3.9', 'A.2.9'),
+    10: ('punjabi', 'A.3.10', 'A.2.10'),
+    11: ('tamil', 'A.3.11', 'A.2.11'),
+    12: ('telugu', 'A.3.12', 'A.2.12'),
+    13: ('urdu', 'A.3.13', 'A.2.13'),
+}
+
+
+def cpToTbl(cp):
+    """Return table entry for the provided Unicode codepoint"""
+    ret = ''
+    if cp is not None:
+        if cp == 0x0d:
+            ret = 'CR'
+        elif cp == 0x0a:
+            ret = 'LF'
+        elif cp == 0x20:
+            ret = 'SP'
+        elif cp == 0x22:
+            ret = 'QM'
+        elif cp > 0x20 and cp < 0x7f:
+            ret = chr(cp)
+        else:
+            ret = '%04X' % (cp, )
+    return ret
+
+
+def tblToCp(entry):
+    """Return a Unicode codepoint for the provided table entry"""
+    ret = None
+    if entry:
+        if entry == 'CR':
+            ret = 0x0d
+        elif entry == 'LF':
+            ret = 0x0a
+        elif entry == 'SP':
+            ret = 0x20
+        elif entry == 'QM':
+            ret = 0x22
+        elif len(entry) > 1:
+            # assume hexadecimal Unicode codepoint
+            ret = int(entry, 16)
+        else:
+            # assume single character
+            ret = ord(entry)
+    return ret
+
+
+def getcharname(cp):
+    """Return Unicode character name, or U+ form if not named"""
+    uval = 'U+%04X' % (cp, )
+    c = chr(cp)
+    name = repr(c)
+    try:
+        name = unicodedata.name(c)
+    except ValueError:
+        pass
+    return uval, name
+
+
+def readTbl(filename):
+    """Read from a CSV lookup table"""
+    res = None
+    with open(filename) as f:
+        cr = csv.reader(f)
+        hdr = None
+        row = 0
+        for r in cr:
+            if not hdr:
+                hdr = True
+                res = {}
+            else:
+                col = 0
+                for c in r[1:]:
+                    cp = tblToCp(c)
+                    if cp is not None:
+                        encVal = col << 4 | row
+                        if encVal < 0x80:
+                            uval, name = getcharname(cp)
+                            res[encVal] = {
+                                'enc': encVal,
+                                'cp': cp,
+                                'char': chr(cp),
+                                'uval': uval,
+                                'name': name,
+                            }
+                    col += 1
+                row += 1
+    return res
+
+
+def writeTbl(tbl, filename, id):
+    """Write out a CSV look up table"""
+    with open(filename, 'w') as f:
+        cw = csv.writer(f, quoting=csv.QUOTE_ALL)
+        cw.writerow((id, '0', '1', '2', '3', '4', '5', '6', '7'))
+        for l in range(16):
+            row = ['%x' % (l, )]
+            for c in range(8):
+                encVal = c << 4 | l
+                cp = None
+                if encVal in tbl:
+                    cp = tbl[encVal]['cp']
+                row.append(cpToTbl(cp))
+            cw.writerow(row)
+
+
+dat = {}
+for lang in LANGUAGES:
+    langName = LANGUAGES[lang][0]
+    print('Language 0x%01x: %s' % (lang, langName))
+    dat[lang] = {
+        'lang': langName,
+    }
+
+    lockSrc = '%s_lock.csv' % (langName, )
+    if os.path.exists(lockSrc):
+        print(' - Read:', lockSrc)
+        dat[lang]['lock'] = readTbl(lockSrc)
+
+    shiftSrc = '%s_shift.csv' % (langName, )
+    if os.path.exists(shiftSrc):
+        print(' - Read:', shiftSrc)
+        dat[lang]['shift'] = readTbl(shiftSrc)
+
+with open(CHARMAP, 'w') as f:
+    print('Write:', CHARMAP)
+    json.dump(dat, f, indent=1)

@@ -1,0 +1,114 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""codegen
+
+Read GSM charmaps from JSON and generate python code.
+
+Creates python script containing encode and
+decode maps for the GSM default and Language
+tables.
+
+Source: 3GPP TS 23.038 version 18.0.0 Release 18
+
+Code exports a single dict:
+
+GSMCHARMAPS = {
+ LANGID: {
+  'locking': {
+   'decode': {
+    0: 123,
+    ...
+   },
+   'encode': {
+    ...
+    123: 0,
+    ...
+   }
+  },
+  'singleShift': {
+  },
+ }
+}
+
+"""
+from yapf.yapflib.yapf_api import FormatCode
+import json
+import sys
+import datetime
+
+CHARMAPSRC = 'gsmcharmaps.json'
+
+if len(sys.argv) != 2:
+    print('Usage: codegen target.py')
+    sys.exit(-1)
+
+charmap = None
+with open(CHARMAPSRC) as f:
+    charmap = json.load(f)
+
+
+def decodeMap(map, buf):
+    """Expand the decoding map"""
+    buf.append("'decode': {")
+    for key in sorted(map, key=int):
+        enc = map[key]['enc']
+        cp = map[key]['cp']
+        uval = map[key]['uval']
+        name = map[key]['name']
+        buf.append('%d: %d,' % (enc, cp))
+    buf.append('},')
+
+
+def encodeMap(map, buf):
+    """Expand the encoding map"""
+    # create a reverse lookup for encode
+    rev = {}
+    for key in map:
+        enc = map[key]['enc']
+        cp = map[key]['cp']
+        if cp not in rev:
+            rev[cp] = enc
+
+    buf.append("'encode': {")
+    for key in sorted(rev):
+        buf.append('%d: %d,' % (key, rev[key]))
+    buf.append('},')
+
+
+def langCode(lang, map, buf):
+    """Add a language map to buf"""
+    comment = map['lang']
+    buf.append('%d: {  # 0x%x %s' % (lang, lang, comment))
+    if 'lock' in map:
+        buf.append("'locking': {")
+        decodeMap(map['lock'], buf)
+        encodeMap(map['lock'], buf)
+        buf.append('},')
+    if 'shift' in map:
+        buf.append("'singleShift': {")
+        decodeMap(map['shift'], buf)
+        encodeMap(map['shift'], buf)
+        buf.append('},')
+    buf.append('},')
+
+
+ocode = []
+ocode.append('# SPDX-License-Identifier: MIT')
+ocode.append('#')
+ocode.append(
+    '# Generated from %r, %s.' %
+    (CHARMAPSRC,
+     datetime.datetime.now().astimezone().isoformat(timespec='seconds')))
+ocode.append('#')
+ocode.append('# Source: 3GPP TS 23.038 version 18.0.0 Release 18')
+ocode.append('')
+ocode.append('GSMCHARMAPS = {')
+for lang in charmap:
+    langId = int(lang)
+    langCode(langId, charmap[lang], ocode)
+ocode.append('}')
+
+# reformat using yapf
+with open(sys.argv[1], 'w') as f:
+    fcode, changed = FormatCode('\n'.join(ocode))
+    f.write(fcode)
